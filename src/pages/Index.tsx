@@ -21,9 +21,57 @@ const Index = () => {
   const [filters, setFilters] = useState<FilterState>({ type: '', year: '' });
   const [showFilters, setShowFilters] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   
   const { toast } = useToast();
   const resultsPerPage = 10;
+
+  // Default popular search terms for initial load
+  const defaultSearchTerms = [
+    "marvel", "disney", "batman", "star wars", "harry potter", 
+    "lord of the rings", "james bond", "avengers", "matrix", "inception"
+  ];
+
+  const loadDefaultContent = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      // Search for popular movies using a random term
+      const randomTerm = defaultSearchTerms[Math.floor(Math.random() * defaultSearchTerms.length)];
+      const response: SearchResponse = await omdbApi.searchMovies({
+        query: randomTerm,
+        page: 1
+      });
+
+      setSearchResults(response.Search || []);
+      setTotalResults(parseInt(response.totalResults) || 0);
+      setCurrentPage(1);
+      setIsInitialLoad(false);
+    } catch (err) {
+      // If default search fails, try with a more common term
+      try {
+        const fallbackResponse: SearchResponse = await omdbApi.searchMovies({
+          query: "movie",
+          page: 1
+        });
+        setSearchResults(fallbackResponse.Search || []);
+        setTotalResults(parseInt(fallbackResponse.totalResults) || 0);
+        setCurrentPage(1);
+        setIsInitialLoad(false);
+      } catch (fallbackErr) {
+        setError("Unable to load content. Please try searching for movies.");
+        setIsInitialLoad(false);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Load default content on component mount
+  useEffect(() => {
+    loadDefaultContent();
+  }, [loadDefaultContent]);
 
   const performSearch = useCallback(async (query: string, page: number = 1) => {
     if (!query.trim()) {
@@ -74,8 +122,16 @@ const Index = () => {
   const handleSearch = useCallback((query: string) => {
     setSearchQuery(query);
     setCurrentPage(1);
-    performSearch(query, 1);
-  }, [performSearch]);
+    setHasSearched(true);
+    setIsInitialLoad(false);
+    if (query.trim()) {
+      performSearch(query, 1);
+    } else {
+      // If search is cleared, reload default content
+      setHasSearched(false);
+      loadDefaultContent();
+    }
+  }, [performSearch, loadDefaultContent]);
 
   const handlePageChange = useCallback((page: number) => {
     performSearch(searchQuery, page);
@@ -84,11 +140,14 @@ const Index = () => {
 
   const handleFilterChange = useCallback((newFilters: FilterState) => {
     setFilters(newFilters);
-    if (searchQuery) {
+    if (searchQuery && hasSearched) {
       setCurrentPage(1);
       // The search will be triggered by the useEffect below
+    } else if (!hasSearched && !isInitialLoad) {
+      // If we're showing default content and filters change, search with current filters
+      loadDefaultContent();
     }
-  }, [searchQuery]);
+  }, [searchQuery, hasSearched, isInitialLoad, loadDefaultContent]);
 
   const handleMovieClick = useCallback((movie: Movie) => {
     setSelectedMovie(movie);
@@ -128,7 +187,10 @@ const Index = () => {
             </h1>
             
             <p className="text-xl md:text-2xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-              Discover your next favorite movie or series. Search through millions of titles with powerful filters.
+              {isInitialLoad 
+                ? "Loading popular movies and series..." 
+                : "Discover your next favorite movie or series. Search through millions of titles with powerful filters."
+              }
             </p>
             
             <div className="pt-8">
@@ -143,7 +205,7 @@ const Index = () => {
       </section>
 
       {/* Filters Section */}
-      {(hasSearched || showFilters) && (
+      {(hasSearched || showFilters || (!isInitialLoad && searchResults.length > 0)) && (
         <section className="border-b border-border/50 bg-card/50">
           <div className="container mx-auto px-4 py-6">
             <FilterPanel
@@ -168,19 +230,19 @@ const Index = () => {
             message={error}
             onRetry={handleRetry}
           />
-        ) : hasSearched ? (
+        ) : hasSearched || (!isInitialLoad && searchResults.length > 0) ? (
           searchResults.length > 0 ? (
             <div className="space-y-8">
               {/* Results Header */}
               <div className="flex items-center justify-between">
                 <h2 className="text-2xl font-bold">
-                  Search Results
+                  {hasSearched ? "Search Results" : "Popular Movies & Series"}
                   <span className="text-muted-foreground font-normal ml-2">
                     ({totalResults.toLocaleString()} found)
                   </span>
                 </h2>
                 
-                {!showFilters && (
+                {!showFilters && !isInitialLoad && (
                   <FilterPanel
                     filters={filters}
                     onFilterChange={handleFilterChange}
@@ -201,36 +263,28 @@ const Index = () => {
                 ))}
               </div>
 
-              {/* Pagination */}
-              <Pagination
-                currentPage={currentPage}
-                totalResults={totalResults}
-                resultsPerPage={resultsPerPage}
-                onPageChange={handlePageChange}
-                isLoading={isLoading}
-              />
+              {/* Pagination - only show for search results or when we have multiple pages */}
+              {(hasSearched || totalResults > resultsPerPage) && (
+                <Pagination
+                  currentPage={currentPage}
+                  totalResults={totalResults}
+                  resultsPerPage={resultsPerPage}
+                  onPageChange={handlePageChange}
+                  isLoading={isLoading}
+                />
+              )}
             </div>
           ) : (
             <EmptyState 
-              title="No movies found"
-              message="Try adjusting your search query or filters to find what you're looking for."
-              onSearch={() => setSearchQuery("")}
+              title={hasSearched ? "No movies found" : "No content available"}
+              message={hasSearched 
+                ? "Try adjusting your search query or filters to find what you're looking for."
+                : "Unable to load content at the moment. Please try searching."
+              }
+              onSearch={hasSearched ? () => setSearchQuery("") : loadDefaultContent}
             />
           )
-        ) : (
-          /* Welcome State */
-          <div className="text-center py-16 space-y-6">
-            <div className="flex items-center justify-center gap-3">
-              <Film className="w-16 h-16 text-primary opacity-50" />
-            </div>
-            <h2 className="text-3xl font-bold text-muted-foreground">
-              Start Your Movie Discovery
-            </h2>
-            <p className="text-lg text-muted-foreground max-w-md mx-auto">
-              Use the search bar above to find movies, TV series, and episodes from the vast OMDb database.
-            </p>
-          </div>
-        )}
+        ) : null}
       </section>
 
       {/* Movie Details Modal */}
