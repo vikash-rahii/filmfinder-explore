@@ -22,6 +22,7 @@ const Index = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const [currentDefaultTerm, setCurrentDefaultTerm] = useState("");
   
   const { toast } = useToast();
   const resultsPerPage = 10;
@@ -32,32 +33,44 @@ const Index = () => {
     "lord of the rings", "james bond", "avengers", "matrix", "inception"
   ];
 
-  const loadDefaultContent = useCallback(async () => {
+  const loadDefaultContent = useCallback(async (page: number = 1) => {
     setIsLoading(true);
     setError(null);
     
     try {
-      // Search for popular movies using a random term
-      const randomTerm = defaultSearchTerms[Math.floor(Math.random() * defaultSearchTerms.length)];
+      // Use the current default term if we have one, otherwise pick a random one
+      let searchTerm = currentDefaultTerm;
+      if (!searchTerm || page === 1) {
+        searchTerm = defaultSearchTerms[Math.floor(Math.random() * defaultSearchTerms.length)];
+        setCurrentDefaultTerm(searchTerm);
+      }
+
       const response: SearchResponse = await omdbApi.searchMovies({
-        query: randomTerm,
-        page: 1
+        query: searchTerm,
+        type: filters.type || undefined,
+        year: filters.year || undefined,
+        page
       });
 
       setSearchResults(response.Search || []);
       setTotalResults(parseInt(response.totalResults) || 0);
-      setCurrentPage(1);
-      setIsInitialLoad(false);
+      setCurrentPage(page);
+      if (page === 1) {
+        setIsInitialLoad(false);
+      }
     } catch (err) {
       // If default search fails, try with a more common term
       try {
         const fallbackResponse: SearchResponse = await omdbApi.searchMovies({
           query: "movie",
+          type: filters.type || undefined,
+          year: filters.year || undefined,
           page: 1
         });
         setSearchResults(fallbackResponse.Search || []);
         setTotalResults(parseInt(fallbackResponse.totalResults) || 0);
         setCurrentPage(1);
+        setCurrentDefaultTerm("movie");
         setIsInitialLoad(false);
       } catch (fallbackErr) {
         setError("Unable to load content. Please try searching for movies.");
@@ -66,11 +79,11 @@ const Index = () => {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [filters, currentDefaultTerm]);
 
   // Load default content on component mount
   useEffect(() => {
-    loadDefaultContent();
+    loadDefaultContent(1);
   }, [loadDefaultContent]);
 
   const performSearch = useCallback(async (query: string, page: number = 1) => {
@@ -134,9 +147,15 @@ const Index = () => {
   }, [performSearch, loadDefaultContent]);
 
   const handlePageChange = useCallback((page: number) => {
-    performSearch(searchQuery, page);
+    if (hasSearched && searchQuery) {
+      // Handle pagination for search results
+      performSearch(searchQuery, page);
+    } else {
+      // Handle pagination for default content
+      loadDefaultContent(page);
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [searchQuery, performSearch]);
+  }, [searchQuery, hasSearched, performSearch, loadDefaultContent]);
 
   const handleFilterChange = useCallback((newFilters: FilterState) => {
     setFilters(newFilters);
@@ -144,8 +163,8 @@ const Index = () => {
       setCurrentPage(1);
       // The search will be triggered by the useEffect below
     } else if (!hasSearched && !isInitialLoad) {
-      // If we're showing default content and filters change, search with current filters
-      loadDefaultContent();
+      // If we're showing default content and filters change, reload with new filters
+      loadDefaultContent(1);
     }
   }, [searchQuery, hasSearched, isInitialLoad, loadDefaultContent]);
 
@@ -154,12 +173,13 @@ const Index = () => {
   }, []);
 
   const handleRetry = useCallback(() => {
-    if (searchQuery) {
+    if (hasSearched && searchQuery) {
       performSearch(searchQuery, currentPage);
+    } else {
+      loadDefaultContent(currentPage);
     }
-  }, [searchQuery, currentPage, performSearch]);
+  }, [searchQuery, hasSearched, currentPage, performSearch, loadDefaultContent]);
 
-  // Trigger search when filters change
   useEffect(() => {
     if (searchQuery && hasSearched) {
       const timeoutId = setTimeout(() => {
@@ -167,8 +187,15 @@ const Index = () => {
       }, 500); // Debounce filter changes
 
       return () => clearTimeout(timeoutId);
+    } else if (!hasSearched && !isInitialLoad && currentDefaultTerm) {
+      // Reload default content with new filters
+      const timeoutId = setTimeout(() => {
+        loadDefaultContent(1);
+      }, 500);
+
+      return () => clearTimeout(timeoutId);
     }
-  }, [filters, searchQuery, hasSearched, performSearch]);
+  }, [filters, searchQuery, hasSearched, performSearch, isInitialLoad, currentDefaultTerm, loadDefaultContent]);
 
   return (
     <div className="min-h-screen bg-background">
